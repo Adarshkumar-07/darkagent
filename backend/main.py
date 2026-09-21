@@ -1,24 +1,38 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from typing import Any
 
-from agent.main import DarkAgent
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
-app = FastAPI(title="DarkAgent API", version="0.1.0")
-agent = DarkAgent()
+from backend.config import SETTINGS
+from backend.models import ChatRequest, ChatResponse, ErrorResponse
+from backend.security import sanitize_text, validate_conversation, validate_message_size
+from backend.services.ai_service import AIService
 
-
-class RunRequest(BaseModel):
-    goal: str = Field(..., min_length=3)
-    max_steps: int = Field(default=6, ge=1, le=20)
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+router = APIRouter(prefix="/api")
+service = AIService()
 
 
-@app.post("/agent/run")
-def run_agent(payload: RunRequest) -> dict:
-    return agent.run(goal=payload.goal, max_steps=payload.max_steps)
+@router.post("/chat", response_model=ChatResponse, responses={400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}})
+async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    # Rate limiting handled by app middleware before route execution.
+    message = sanitize_text(payload.message)
+    validate_message_size(message, SETTINGS.max_message_chars)
+    validate_conversation([item.model_dump() for item in payload.conversation])
+
+    normalized_history = [item.model_dump() for item in payload.conversation]
+    try:
+        reply = service.generate_reply(message, normalized_history)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive catch for runtime provider failures
+        raise HTTPException(status_code=502, detail="The AI service is currently unavailable. Please try again later.") from exc
+
+    updated_conversation = [
+        *normalized_history,
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": reply},
+    ]
+    return ChatResponse(reply=reply, conversation=updated_conversation, status="ok")
