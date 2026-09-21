@@ -1,49 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Annotated, Literal
+import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+PATTERNS = (r"<script", r"javascript:", r"onerror\s*=", r"eval\s*\(", r"document\.cookie")
 
+def sanitize_text(value: str) -> str:
+    return value.replace("\x00", "").strip()[:2_000]
 
-class Message(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def contains_malicious_content(value: str) -> bool:
+    return any(re.search(pattern, value.lower()) for pattern in PATTERNS)
 
-    role: Annotated[Literal["user", "assistant", "system"], Field(...)]
-    content: Annotated[str, Field(..., min_length=1, max_length=10000)]
-    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+def validate_conversation(conversation: list[dict]) -> None:
+    if len(conversation) > 20: raise ValueError("conversation exceeds the maximum message limit")
+    for item in conversation:
+        if item.get("role") not in {"user", "assistant", "system"}: raise ValueError("conversation role is invalid")
+        if not isinstance(item.get("content"), str) or contains_malicious_content(item["content"]):
+            raise ValueError("conversation content is invalid")
 
-    @field_validator("content")
-    @classmethod
-    def clean_content(cls, value: str) -> str:
-        return value.strip()
-
-
-class ChatRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    message: Annotated[str, Field(..., min_length=1, max_length=2000)]
-    conversation: list[Message] = Field(default_factory=list)
-
-    @field_validator("message")
-    @classmethod
-    def validate_message(cls, value: str) -> str:
-        sanitized = value.strip()
-        if not sanitized:
-            raise ValueError("message cannot be empty")
-        return sanitized
-
-
-class ChatResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    reply: str
-    conversation: list[Message] = Field(default_factory=list)
-    status: Literal["ok", "error"] = "ok"
-
-
-class ErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    detail: str
-    code: str = "validation_error"
+def validate_message_size(message: str, max_chars: int) -> None:
+    if len(message) > max_chars: raise ValueError(f"message exceeds {max_chars} characters")

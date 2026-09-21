@@ -1,60 +1,37 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from datetime import datetime, timezone
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+class Message(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["user", "assistant", "system"]
+    content: str = Field(..., min_length=1, max_length=10_000)
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    @field_validator("content")
+    @classmethod
+    def trim(cls, value: str) -> str:
+        value = value.strip()
+        if not value: raise ValueError("content cannot be empty")
+        return value
 
-load_dotenv()
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(..., min_length=1, max_length=2_000)
+    conversation: list[Message] = Field(default_factory=list, max_length=20)
+    @field_validator("message")
+    @classmethod
+    def trim_message(cls, value: str) -> str:
+        value = value.strip()
+        if not value: raise ValueError("message cannot be empty")
+        return value
 
+class ChatResponse(BaseModel):
+    reply: str = Field(..., min_length=1)
+    conversation: list[Message]
+    status: Literal["ok"] = "ok"
 
-class Settings(BaseModel):
-    app_name: str = "Aegis Voice"
-    environment: str = "development"
-    openai_api_key: str | None = None
-    default_model: str = "gpt-4o-mini"
-    max_request_size: int = 1024 * 1024
-    max_conversation_messages: int = 20
-    max_message_chars: int = 2000
-    max_history_chars: int = 20000
-    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"])
-    rate_limit_requests: int = 20
-    rate_limit_window_seconds: int = 60
-
-
-@dataclass
-class RuntimeSettings:
-    app_name: str = "Aegis Voice"
-    environment: str = "development"
-    openai_api_key: str | None = None
-    default_model: str = "gpt-4o-mini"
-    max_request_size: int = 1024 * 1024
-    max_conversation_messages: int = 20
-    max_message_chars: int = 2000
-    max_history_chars: int = 20000
-    allowed_origins: list[str] = field(default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"])
-    rate_limit_requests: int = 20
-    rate_limit_window_seconds: int = 60
-
-
-def get_settings() -> RuntimeSettings:
-    import os
-
-    allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-    return RuntimeSettings(
-        app_name=os.getenv("APP_NAME", "Aegis Voice"),
-        environment=os.getenv("ENVIRONMENT", "development"),
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        default_model=os.getenv("AI_MODEL", "gpt-4o-mini"),
-        max_request_size=int(os.getenv("MAX_REQUEST_SIZE", str(1024 * 1024))),
-        max_conversation_messages=int(os.getenv("MAX_CONVERSATION_MESSAGES", "20")),
-        max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "2000")),
-        max_history_chars=int(os.getenv("MAX_HISTORY_CHARS", "20000")),
-        allowed_origins=[origin.strip() for origin in allowed_origins.split(",") if origin.strip()],
-        rate_limit_requests=int(os.getenv("RATE_LIMIT_REQUESTS", "20")),
-        rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
-    )
-
-
-SETTINGS = get_settings()
+class ErrorResponse(BaseModel):
+    detail: str
+    code: str = "error"
